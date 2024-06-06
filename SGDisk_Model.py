@@ -5,7 +5,7 @@ Created on Sat Jan 20 11:30:52 2024
 @author: ryanw
 """
 
-import os
+import os, sys
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.optimize as opt
@@ -19,6 +19,22 @@ import pagn.constants as ct
 # plt.rcParams.update({"text.usetex": True})
 # plt.rcParams['font.family'] = 'serif'
 # plt.rcParams['mathtext.fontset'] = 'cm'
+
+
+class HiddenPrints:
+    '''Little class to stop pAGN printing during disc construction.
+        With thanks to https://stackoverflow.com/a/45669280'''
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
+
+
+
+
 
 G = 6.67e-11
 G_pc = 4.3e-3
@@ -46,8 +62,10 @@ def disk_model(M, f_edd, alpha, b):
 
     n = 1e3
     
-    sk = Sirko.SirkoAGN(Mbh=M*ct.MSun, le=f_edd, alpha=alpha, b=b)
-    sk.solve_disk(n)
+    with HiddenPrints():
+        sk = Sirko.SirkoAGN(Mbh=M*ct.MSun, le=f_edd, alpha=alpha, b=b)
+        sk.Rmax = 1e6 * sk.Rs   # only want to go up to a million radii
+        sk.solve_disk(n)
     
     radii = sk.R
     log_radii = sk.R / sk.Rs
@@ -143,12 +161,12 @@ def plot_many_models():
             for k, alpha in enumerate(alphas):
                 log_radii, t_eff, temps, tau, kappa, Sigma, cs, rho, h, Q, beta, prad, pgas = disk_model(M, f_edd, alpha, 0)
 
-                axes[0].plot(log_radii, 10**temps, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
-                axes[1].plot(log_radii, 10**Sigma, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
-                axes[2].plot(log_radii, 10**h, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
-                axes[3].plot(log_radii, 10**kappa, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
-                axes[4].plot(log_radii, 10**tau, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
-                axes[5].plot(log_radii, 10**Q, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
+                axes[0].plot(log_radii, temps, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
+                axes[1].plot(log_radii, Sigma, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
+                axes[2].plot(log_radii, h, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
+                axes[3].plot(log_radii, kappa, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
+                axes[4].plot(log_radii, tau, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
+                axes[5].plot(log_radii, Q, color=colours[i], ls=ls[j], lw=lw[k], rasterized=True)
 
     axes[0].set(ylabel='$T_{\mathrm{mid}}$ (K)')
     axes[1].set(ylabel='$\Sigma$ (g/cm$^2$)')
@@ -182,14 +200,14 @@ def calculate_torques(M, f_edd, visc):
     rs = 2 * G_cgs * M * M_odot_cgs / c_cgs**2
     log_radii, t_eff, temps, tau, kappa, Sigma, cs, rho, h, Q, beta, prad, pgas = disk_model(M, f_edd, visc, 0)
 
-    spl_sigma = interp.CubicSpline(np.log10(log_radii), Sigma, extrapolate=True)
-    spl_temp = interp.CubicSpline(np.log10(log_radii), temps, extrapolate=True)
-    spl_dens = interp.CubicSpline(np.log10(log_radii), rho, extrapolate=True)
-    spl_h = interp.CubicSpline(np.log10(log_radii), h, extrapolate=True)
-    spl_kappa = interp.CubicSpline(np.log10(log_radii), kappa, extrapolate=True)
+    spl_sigma = interp.CubicSpline(np.log10(log_radii), np.log10(Sigma), extrapolate=True)
+    spl_temp = interp.CubicSpline(np.log10(log_radii), np.log10(temps), extrapolate=True)
+    spl_dens = interp.CubicSpline(np.log10(log_radii), np.log10(rho), extrapolate=True)
+    spl_h = interp.CubicSpline(np.log10(log_radii), np.log10(h), extrapolate=True)
+    spl_kappa = interp.CubicSpline(np.log10(log_radii), np.log10(kappa), extrapolate=True)
     # spl_tau = interp.CubicSpline(np.log10(log_radii), tau, extrapolate=True)
-    spl_P = interp.CubicSpline(np.log10(log_radii), np.log10(10**prad + 10**pgas), extrapolate=True) # total pressure
-    spl_cs = interp.CubicSpline(np.log10(log_radii), cs, extrapolate=True)
+    spl_P = interp.CubicSpline(np.log10(log_radii), np.log10(prad + pgas), extrapolate=True) # total pressure
+    spl_cs = interp.CubicSpline(np.log10(log_radii), np.log10(cs), extrapolate=True)
 
     def alpha(r): return -spl_sigma.derivative()(np.log10(r))
     def beta(r): return -spl_temp.derivative()(np.log10(r))
@@ -290,14 +308,15 @@ def plot_many_torques():
     # fig2, ax2 = plt.subplots()
 
     masses = [1e6, 1e7, 1e8, 1e9]
-    fracs = [0.1]
+    fracs = [0.05]
     # alphas = [0.01, 0.1]
-    alphas = [0.01]
+    alphas = [0.1]
     colours = ['tab:orange', 'tab:red', 'tab:purple', 'tab:blue']
 
     for i, M in enumerate(masses):
         for j, f_edd in enumerate(fracs):
             for jj, visc in enumerate(alphas):
+                print(M, f_edd, visc)
                 log_radii, torques = calculate_torques(M, f_edd, visc)
                 
                 pos_vals = torques > 0 
@@ -319,7 +338,7 @@ def plot_many_torques():
     
     # ax2.set(xscale='log')
 
-def plot_migration_traps(visc):
+def plot_migration_traps(visc, isolums=True):
     from matplotlib.colors import LogNorm
     import numpy.ma as ma
     plt.rcParams.update({"text.usetex": True})
@@ -347,10 +366,41 @@ def plot_migration_traps(visc):
     
     Zm = ma.masked_where(trap_rads == 1, trap_rads).T
     
+    vmin = min(Zm.min(), 1e3)
+    vmax = max(Zm.max(), 1e5)
     contour = ax.pcolormesh(x, y, Zm, cmap='viridis', 
-                            norm=LogNorm(vmin=Zm.min(), vmax=Zm.max()),
+                            norm=LogNorm(vmin=vmin, vmax=vmax),
                             rasterized=True)
-    ax.set(xlabel='SMBH Mass', ylabel='Eddington Fraction', xscale='log', yscale='log')
+    
+    ax.set(xlabel='SMBH Mass ($M_\odot$)', ylabel='Eddington Fraction', xscale='log', yscale='log')
+    xmin, xmax = ax.get_xlim(); ymin, ymax = ax.get_ylim()  #get the current figure bounds so that we don't alter it
+    
+    if isolums == True:
+        edd_frac = lambda m, L: L / (4 * np.pi * G_cgs * m_H * m * M_odot_cgs * c_cgs / thomson_cgs)
+        lums = np.linspace(42, 47, 5)
+        
+        print(ymin, ymax, xmin, xmax)
+        x = np.linspace(xmin, xmax, 10)
+        # x = abs(x)
+        print(x)
+        # now to plot the isoradii lines on the HR diagram
+        for lum in lums:
+            y = edd_frac(x, 10**lum)
+            ax.plot(x, y, linewidth=0.6, linestyle='--', color='k')
+            text = f"$10^{{{lum:.1f}}}$"
+            if ymin < max(y) < ymax:    #this makes sure that text doesn't show up outside of the plot bounds
+                textx, texty = min(x), 0.8 * max(y)
+            else:
+                text_mass = lambda f, L: f * L / (4 * np.pi * G_cgs * m_H * M_odot_cgs * c_cgs / thomson_cgs)
+                texty = 0.63 * ymax
+                textx = 0.97 * text_mass(texty, 10**lum)
+                
+            if textx < 0.7 * xmax:
+                ax.text(textx, texty, text, color='k', rotation=-55, fontsize=8)
+        ax.set_xlim(xmin, xmax); ax.set_ylim(ymin, ymax)    #make sure the figure bounds dont change from before
+        # ax.set_ylim(ymin, ymax)
+        
+    
     fig.colorbar(contour, label='Migration Trap Location ($R_s$)')
     fig.savefig(f'Images/MigrationTraps-alph{visc}.png', dpi=400, bbox_inches='tight')
     fig.savefig(f'Images/MigrationTraps-alph{visc}.pdf', dpi=400, bbox_inches='tight')
@@ -358,7 +408,7 @@ def plot_migration_traps(visc):
                     
             
 
-plot_many_models()
-# plot_many_torques()
+# plot_many_models()
+plot_many_torques()
 # plot_migration_traps(0.01)
 # plot_migration_traps(0.1)
