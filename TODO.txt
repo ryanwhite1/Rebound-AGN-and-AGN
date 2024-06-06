@@ -1,0 +1,2 @@
+- look at changing initial conditions
+- look at the frequency of adding BHs
