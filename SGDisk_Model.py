@@ -67,21 +67,23 @@ def disk_model(M, f_edd, alpha, b):
         sk.Rmax = 1e6 * sk.Rs   # only want to go up to a million radii
         sk.solve_disk(n)
     
-    radii = sk.R
+    sk.plot()
+    
+    radii = sk.R * ct.SI_to_cms
     log_radii = sk.R / sk.Rs
     t_eff = sk.Teff4**(1/4)
     temps = sk.T 
-    rho = sk.rho 
-    H = sk.h 
+    rho = sk.rho * ct.SI_to_gcm3
+    H = sk.h * ct.SI_to_cms
     h = H / radii
-    Sigma = 2 * rho * H
-    kappa = sk.kappa 
+    Sigma = 2 * rho * H * 10
+    kappa = sk.kappa * ct.SI_to_cm2g
     tau = sk.tauV
-    cs = sk.cs 
+    cs = sk.cs * ct.SI_to_cms
     Q = sk.Q 
     cs2 = cs*cs
-    pgas = (ct.Kb / ct.massU) * temps / cs2
-    prad = tau * ct.sigmaSB / (2 * ct.c) * sk.Teff4 / (rho * cs2)
+    pgas = (ct.Kb / ct.massU) * temps / cs2 * ct.SI_to_cms**2
+    prad = tau * ct.sigmaSB / (2 * ct.c) * sk.Teff4 / (rho * cs2) / ct.SI_to_cms**2 / ct.SI_to_cms
     beta = pgas / (prad + pgas)
 
     return [log_radii, t_eff, temps, tau, kappa, Sigma, cs, rho, h, Q, beta, prad, pgas]
@@ -108,20 +110,21 @@ def save_disk_model(disk_params, location='', name='', save_all=False):
             np.savetxt(filenames[index], disk_params[index], delimiter=',')
 
 
-def plot_disk_model(disk_params, axes=[], save=False, location=''):
+def plot_disk_model(M, f_edd, visc, axes=[], save=False, location=''):
     '''
     '''
-    log_radii, t_eff, temps, tau, kappa, Sigma, cs, rho, h, Q, beta, prad, pgas = disk_params
+    log_radii, t_eff, temps, tau, kappa, Sigma, cs, rho, h, Q, beta, prad, pgas = disk_model(M, f_edd, visc, 0)
 
     if len(axes) == 0:
-        fig, axes = plt.subplots(nrows=6, sharex=True, figsize=(5, 10), gridspec_kw={'hspace': 0})
+        fig, axes = plt.subplots(nrows=7, sharex=True, figsize=(5, 10), gridspec_kw={'hspace': 0})
 
-    axes[0].plot(log_radii, 10**temps)
-    axes[1].plot(log_radii, 10**Sigma)
-    axes[2].plot(log_radii, 10**h)
-    axes[3].plot(log_radii, 10**kappa)
-    axes[4].plot(log_radii, 10**tau)
-    axes[5].plot(log_radii, 10**Q)
+    axes[0].plot(log_radii, temps)
+    axes[1].plot(log_radii, Sigma)
+    axes[2].plot(log_radii, h)
+    axes[3].plot(log_radii, kappa)
+    axes[4].plot(log_radii, tau)
+    axes[5].plot(log_radii, Q)
+    axes[6].plot(log_radii, rho)
 
     for i, ax in enumerate(axes):
         ax.set(xscale='log', yscale='log')
@@ -132,7 +135,9 @@ def plot_disk_model(disk_params, axes=[], save=False, location=''):
     axes[2].set(ylabel='$h$ ($H$/$r$)')
     axes[3].set(ylabel='$\kappa$ (cm$^2$/g)')
     axes[4].set(ylabel=r'$\tau$')
-    axes[5].set(ylabel='Toomre, $Q$', xlabel='$r$/$R_s$')
+    axes[5].set(ylabel='Toomre, $Q$')
+    axes[6].set(ylabel=r'Density, $\rho$')
+    axes[-1].set(xlabel='$r$/$R_s$')
 
     if save:
         path = os.path.dirname(os.path.abspath(__file__)) + location
@@ -194,12 +199,16 @@ def plot_many_models():
     fig.savefig("Images/SGDiskModels.pdf", dpi=400, bbox_inches='tight')
     
 def calculate_torques(M, f_edd, visc):
-    bh_mass = 10 * M_odot_cgs
+    bh_sol_mass = 10
+    q = bh_sol_mass / M
+    bh_mass = bh_sol_mass * M_odot_cgs
+    agn_mass = M * M_odot_cgs
     gamma_coeff = 5/3 
 
     rs = 2 * G_cgs * M * M_odot_cgs / c_cgs**2
     log_radii, t_eff, temps, tau, kappa, Sigma, cs, rho, h, Q, beta, prad, pgas = disk_model(M, f_edd, visc, 0)
 
+    print(np.log10(rho))
     spl_sigma = interp.CubicSpline(np.log10(log_radii), np.log10(Sigma), extrapolate=True)
     spl_temp = interp.CubicSpline(np.log10(log_radii), np.log10(temps), extrapolate=True)
     spl_dens = interp.CubicSpline(np.log10(log_radii), np.log10(rho), extrapolate=True)
@@ -213,12 +222,13 @@ def calculate_torques(M, f_edd, visc):
     def beta(r): return -spl_temp.derivative()(np.log10(r))
     def P_deriv(r): return -spl_P.derivative()(np.log10(r))
     
-    log_radii = np.logspace(1, 5, 1000)
+    radii = np.logspace(1, 5, 1000)
     torques = np.zeros(len(log_radii))
 
-    for ii, r in enumerate(log_radii):
+    for ii, r in enumerate(radii):
         logr = np.log10(r)
-        Gamma_0 = ((10/M) / 10**spl_h(logr))**2 * 10**spl_sigma(logr) * (r*rs)**4 * angvel(r*rs, M)**2
+        R = r * rs
+        Gamma_0 = (q / 10**spl_h(logr))**2 * 10**spl_sigma(logr) * R**4 * angvel(R, M)**2
         
         ### Migration from pardekooper
         # c_v = 14304 / 1000
@@ -230,38 +240,40 @@ def calculate_torques(M, f_edd, visc):
         # Gamma = Gamma_0 * (Gamma_ad * Theta*Theta + Gamma_iso) / ((Theta + 1)*(Theta + 1));
         
         ### Migration from Jimenez
-        H = 10**spl_h(logr) * r*rs
-        chi = 16. * gamma_coeff * (gamma_coeff - 1.) * stef_boltz * 10**(4 * spl_temp(logr)) / (3. * 10**(2 * spl_dens(logr)) * 10**spl_kappa(logr) * (angvel(r*rs, M) * H)**2)
-        chi_chi_c = chi / (H**2 * angvel(r*rs, M))
+        # print(10**(spl_dens(logr)))
+        H = 10**spl_h(logr) * R
+        chi = 16. * gamma_coeff * (gamma_coeff - 1.) * stef_boltz * 10**(4 * spl_temp(logr)) / (3. * 10**(2 * spl_dens(logr)) * 10**spl_kappa(logr) * (angvel(R, M) * H)**2)
+        chi_chi_c = chi / (H**2 * angvel(R, M))
         fx = (np.sqrt(chi_chi_c / 2.) + 1. / gamma_coeff) / (np.sqrt(chi_chi_c / 2.) + 1.);
         Gamma_lindblad = - (2.34 - 0.1 * alpha(r) + 1.5 * beta(r)) * fx;
         Gamma_simp_corot = (0.46 - 0.96 * alpha(r) + 1.8 * beta(r)) / gamma_coeff;
-        Gamma = Gamma_0 * (Gamma_lindblad + Gamma_simp_corot);
+        Gamma = Gamma_0 * (Gamma_lindblad + Gamma_simp_corot)
 
-        ### Thermal torques
-        dPdr = P_deriv(r)
-        x_c = dPdr * H**2 / (3 * gamma_coeff * r*rs)
-        L = 4. * np.pi * G_cgs * bh_mass * m_H * c_cgs / thomson_cgs;     # accretion assuming completely ionized hydrogen
-        # L = accretion * 4 * np.pi * G_cgs * bh_mass * c_cgs / 10**spl_kappa(logr)       # accretion assuming the AGN disk composition
-        # below are equations 17-23 from gilbaum 2022
-        R_BHL = 2 * G_cgs * bh_mass / (H * angvel(r*rs, M))**2
-        R_H = r*rs * np.cbrt(10 / (3 * M))
-        b_H = np.sqrt(R_BHL * R_H)
-        mdot_RBHL = np.pi * min(R_BHL, b_H) * min(R_BHL, b_H, H) * (H * angvel(r*rs, M))
-        L_RBHL = 0.1 * c_cgs**2 * mdot_RBHL
-        L = min(L_RBHL, L)
+        # ### Thermal torques
+        # dPdr = P_deriv(r)
+        # x_c = dPdr * H**2 / (3 * gamma_coeff * R)
+        # L = 4. * np.pi * G_cgs * bh_mass * m_H * c_cgs / thomson_cgs;     # accretion assuming completely ionized hydrogen
+        # # L = accretion * 4 * np.pi * G_cgs * bh_mass * c_cgs / 10**spl_kappa(logr)       # accretion assuming the AGN disk composition
+        # # below are equations 17-23 from gilbaum 2022
+        # R_BHL = 2 * G_cgs * bh_mass / (H * angvel(R, M))**2
+        # R_H = R * np.cbrt(10 / (3 * M))
+        # b_H = np.sqrt(R_BHL * R_H)
+        # mdot_RBHL = np.pi * min(R_BHL, b_H) * min(R_BHL, b_H, H) * (H * angvel(R, M))
+        # L_RBHL = 0.1 * c_cgs**2 * mdot_RBHL
+        # L = min(L_RBHL, L)
         
-        Lc = 4. * np.pi * G_cgs * bh_mass * 10**spl_dens(logr) * chi / gamma_coeff
-        # print(L/Lc)
-        lambda_ = np.sqrt(2. * chi / (3 * gamma_coeff * angvel(r*rs, M)));
-        Gamma_thermal = 1.61 * (gamma_coeff - 1) / gamma_coeff * x_c / lambda_ * (L/Lc - 1.) * Gamma_0 / 10**spl_h(logr);
+        # Lc = 4. * np.pi * G_cgs * bh_mass * 10**spl_dens(logr) * chi / gamma_coeff
+        # # print(L/Lc)
+        # lambda_ = np.sqrt(2. * chi / (3 * gamma_coeff * angvel(R, M)));
+        # Gamma_thermal = 1.61 * (gamma_coeff - 1) / gamma_coeff * x_c / lambda_ * (L/Lc - 1.) * Gamma_0 / 10**spl_h(logr)
 
-        ### GR Inspiral torque
-        Gamma_GW = Gamma_0 * (-32 / 5 * (c_cgs / 10**spl_cs(logr))**3 * 10**(6 * spl_h(logr)) * (2*r)**-4 * M*M_odot_cgs / (10**spl_sigma(logr) * (r*rs)**2))
+        # # ### GR Inspiral torque
+        # # Gamma_GW = Gamma_0 * (-32 / 5 * (c_cgs / 10**spl_cs(logr))**3 * 10**(6 * spl_h(logr)) * (2*r)**-4 * agn_mass / (10**spl_sigma(logr) * (R)**2))
         
-        Gamma += Gamma_thermal + Gamma_GW
+        # Gamma_GW = 0
+        # Gamma += Gamma_thermal + Gamma_GW
         torques[ii] = Gamma
-    return log_radii, torques
+    return radii, torques
 
 def plot_torques(M, f_edd, visc, disk_params, save=False, location=''):
     '''
@@ -405,10 +417,9 @@ def plot_migration_traps(visc, isolums=True):
     fig.savefig(f'Images/MigrationTraps-alph{visc}.png', dpi=400, bbox_inches='tight')
     fig.savefig(f'Images/MigrationTraps-alph{visc}.pdf', dpi=400, bbox_inches='tight')
                 
-                    
-            
-
+plot_disk_model(1e8, 0.5, 0.01)
+# plot_torques(1e8, 0.5, 0.01, None)
 # plot_many_models()
-plot_many_torques()
+# plot_many_torques()
 # plot_migration_traps(0.01)
 # plot_migration_traps(0.1)
